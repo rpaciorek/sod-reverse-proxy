@@ -8,6 +8,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
+using System.Reflection;
 
 namespace ReverseProxyApplication
 {
@@ -23,54 +24,46 @@ namespace ReverseProxyApplication
 
         public async Task Invoke(HttpContext context)
         {
-            var targetUri = BuildTargetUri(context.Request);
-
-            if (targetUri != null)
-            {
-                var targetRequestMessage = CreateTargetMessage(context, targetUri);
-
-                using (var responseMessage = await _httpClient.SendAsync(targetRequestMessage, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted))
-                {
-                    context.Response.StatusCode = (int)responseMessage.StatusCode;
-
-                    CopyFromTargetResponseHeaders(context, responseMessage);
-
-                    await ProcessResponseContent(context, responseMessage);
-                }
-
+            if (context.Request.Path.ToString().EndsWith("/DWADragonsMain.xml")) {
+                await SendMainXml(context);
                 return;
             }
-
-            await _nextMiddleware(context);
+            
+            Uri targetUri;
+            PathString remainingPath;
+            if (context.Request.Path.StartsWithSegments("/apiproxy", out remainingPath)) {
+                targetUri = new Uri("https://api.sodoff.spirtix.com" + remainingPath);
+            } else {
+                if (!context.Request.Path.StartsWithSegments("/sproxy.com", out remainingPath))
+                    remainingPath = context.Request.Path;
+                targetUri = new Uri("https://media.sodoff.spirtix.com" + remainingPath);
+            }
+            
+            var targetRequestMessage = CreateTargetMessage(context, targetUri);
+            using (var responseMessage = await _httpClient.SendAsync(targetRequestMessage, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted))
+            {
+                context.Response.StatusCode = (int)responseMessage.StatusCode;
+                CopyFromTargetResponseHeaders(context, responseMessage);
+                await ProcessResponseContent(context, responseMessage);
+            }
         }
 
+        private async Task SendMainXml(HttpContext context) {
+            var assembly = Assembly.GetExecutingAssembly();
+            Stream stream = assembly.GetManifestResourceStream(
+                assembly.GetManifestResourceNames().Single(str => str.EndsWith("DWADragonsMain.xml"))
+            );
+            MemoryStream ms = new MemoryStream();
+            stream.CopyTo(ms);
+            
+            context.Response.StatusCode = 200;
+            await context.Response.Body.WriteAsync(ms.ToArray());
+        }
+        
         private async Task ProcessResponseContent(HttpContext context, HttpResponseMessage responseMessage)
         {
             var content = await responseMessage.Content.ReadAsByteArrayAsync();
-
-            if (IsContentOfType(responseMessage, "text/html") || IsContentOfType(responseMessage, "text/javascript"))
-            {
-                var stringContent = Encoding.UTF8.GetString(content);
-                var newContent = stringContent.Replace("https://www.google.com", "/google")
-                    .Replace("https://www.gstatic.com", "/googlestatic")
-                    .Replace("https://docs.google.com/forms", "/googleforms");
-                await context.Response.WriteAsync(newContent, Encoding.UTF8);
-            } else
-            {
-                await context.Response.Body.WriteAsync(content);
-            }
-        }
-
-        private bool IsContentOfType(HttpResponseMessage responseMessage, string type)
-        {
-            var result = false;
-
-            if (responseMessage.Content?.Headers?.ContentType != null)
-            {
-                result = responseMessage.Content.Headers.ContentType.MediaType == type;
-            }
-
-            return result;
+            await context.Response.Body.WriteAsync(content);
         }
 
         private HttpRequestMessage CreateTargetMessage(HttpContext context, Uri targetUri)
@@ -119,6 +112,7 @@ namespace ReverseProxyApplication
             }
             context.Response.Headers.Remove("transfer-encoding");
         }
+        
         private static HttpMethod GetMethod(string method)
         {
             if (HttpMethods.IsDelete(method)) return HttpMethod.Delete;
@@ -129,29 +123,6 @@ namespace ReverseProxyApplication
             if (HttpMethods.IsPut(method)) return HttpMethod.Put;
             if (HttpMethods.IsTrace(method)) return HttpMethod.Trace;
             return new HttpMethod(method);
-        }
-
-        private Uri BuildTargetUri(HttpRequest request)
-        {
-            Uri targetUri = null;
-            PathString remainingPath;
-
-            if (request.Path.StartsWithSegments("/googleforms", out remainingPath))
-            {
-                targetUri = new Uri("https://docs.google.com/forms" + remainingPath);
-            }
-
-            if (request.Path.StartsWithSegments("/google", out remainingPath))
-            {
-                targetUri = new Uri("https://www.google.com" + remainingPath);
-            }
-
-            if (request.Path.StartsWithSegments("/googlestatic", out remainingPath))
-            {
-                targetUri = new Uri(" https://www.gstatic.com" + remainingPath);
-            }
-
-            return targetUri;
         }
     }
 }
