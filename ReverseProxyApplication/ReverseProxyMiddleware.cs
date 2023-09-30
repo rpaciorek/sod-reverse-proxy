@@ -14,21 +14,17 @@ namespace ReverseProxyApplication
 {
     public class ReverseProxyMiddleware
     {
-        private static readonly HttpClient _httpClient = new HttpClient();
-        private readonly RequestDelegate _nextMiddleware;
+        public ReverseProxyMiddleware(RequestDelegate nextMiddleware) {}
 
-        public ReverseProxyMiddleware(RequestDelegate nextMiddleware)
-        {
-            _nextMiddleware = nextMiddleware;
-        }
-
-        public async Task Invoke(HttpContext context)
-        {
+        public async Task Invoke(HttpContext context) {
             if (context.Request.Path.ToString().EndsWith("/DWADragonsMain.xml")) {
-                await SendMainXml(context);
+                if (context.Request.Path.ToString().EndsWith("3.12.0/DWADragonsMain.xml"))
+                    await SendMainXml(context, "3.12");
+                else
+                    await SendMainXml(context, "1.13");
                 return;
             }
-            
+
             Uri targetUri;
             PathString remainingPath;
             if (context.Request.Path.StartsWithSegments("/apiproxy", out remainingPath)) {
@@ -38,40 +34,44 @@ namespace ReverseProxyApplication
                     remainingPath = context.Request.Path;
                 targetUri = new Uri("https://media.sodoff.spirtix.com" + remainingPath);
             }
-            
+
+            HttpClient httpClient = new HttpClient();
             var targetRequestMessage = CreateTargetMessage(context, targetUri);
-            using (var responseMessage = await _httpClient.SendAsync(targetRequestMessage, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted))
+            using (var responseMessage = await httpClient.SendAsync(targetRequestMessage, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted))
             {
                 context.Response.StatusCode = (int)responseMessage.StatusCode;
                 CopyFromTargetResponseHeaders(context, responseMessage);
-                await ProcessResponseContent(context, responseMessage);
+                await WriteResponseContent(context, await responseMessage.Content.ReadAsByteArrayAsync());
             }
         }
 
-        private async Task SendMainXml(HttpContext context) {
+        private async Task SendMainXml(HttpContext context, string version) {
             var assembly = Assembly.GetExecutingAssembly();
             Stream stream = assembly.GetManifestResourceStream(
-                assembly.GetManifestResourceNames().Single(str => str.EndsWith("DWADragonsMain.xml"))
+                assembly.GetManifestResourceNames().Single(str => str.EndsWith("DWADragonsMain-" + version + ".xml"))
             );
             MemoryStream ms = new MemoryStream();
             stream.CopyTo(ms);
             
             context.Response.StatusCode = 200;
-            await context.Response.Body.WriteAsync(ms.ToArray());
+            await WriteResponseContent(context, ms.ToArray());
         }
         
-        private async Task ProcessResponseContent(HttpContext context, HttpResponseMessage responseMessage)
-        {
-            var content = await responseMessage.Content.ReadAsByteArrayAsync();
-            await context.Response.Body.WriteAsync(content);
+        private async Task WriteResponseContent(HttpContext context, Byte[] data) {
+            // NOTE: loop with 8192 buffer size write + flush operations (instead of simple `context.Response.Body.WriteAsync(data)`)
+            //       to avoid `System.Net.Sockets.SocketException (10040): Unknown error (0x2738)` on some systems
+            for (int i=0, len=8192; i<data.Length; i+=len) {
+                if (i+len > data.Length)
+                    len = data.Length - i;
+                await context.Response.Body.WriteAsync(data, i, len);
+                await context.Response.Body.FlushAsync();
+            }
         }
 
         private HttpRequestMessage CreateTargetMessage(HttpContext context, Uri targetUri)
         {
             var requestMessage = new HttpRequestMessage();
             CopyFromOriginalRequestContentAndHeaders(context, requestMessage);
-
-            targetUri = new Uri(QueryHelpers.AddQueryString(targetUri.OriginalString, new Dictionary<string, string>() { { "entry.1884265043", "John Doe" }}));
 
             requestMessage.RequestUri = targetUri;
             requestMessage.Headers.Host = targetUri.Host;

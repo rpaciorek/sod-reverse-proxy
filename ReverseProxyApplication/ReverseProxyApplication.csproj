@@ -5,7 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="DWADragonsMain.xml">
+    <EmbeddedResource Include="DWADragonsMain-1.13.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <EmbeddedResource Include="DWADragonsMain-3.12.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </EmbeddedResource>
   </ItemGroup>
